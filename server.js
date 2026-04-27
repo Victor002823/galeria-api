@@ -19,10 +19,10 @@ app.use(express.json({ limit: "25mb" }));
 // 🔥 CONEXIÓN R2
 const s3 = new S3Client({
     region: "auto",
-    endpoint: "https://64f4bf1a6940be0b5c550695de756795.r2.cloudflarestorage.com",
+    endpoint: process.env.R2_ENDPOINT,
     credentials: {
-        accessKeyId: "0e25f753c5227997eed8fdcea2998679",
-        secretAccessKey: "982abab2f9f714934cebb515b0a78ae5bfa83b04bdbc2ee6ed23d984ea07cbe4"
+        accessKeyId: process.env.R2_ACCESS_KEY,
+        secretAccessKey: process.env.R2_SECRET_KEY
     }
 });
 
