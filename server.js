@@ -8,6 +8,8 @@ const {
     DeleteObjectCommand
 } = require("@aws-sdk/client-s3");
 
+const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
+
 const app = express();
 
 const BUCKET = "galeriax";
@@ -16,7 +18,7 @@ const BUCKET = "galeriax";
 app.use(cors());
 app.use(express.json({ limit: "25mb" }));
 
-// 🔥 CONEXIÓN R2
+// 🔥 R2 CONFIG
 const s3 = new S3Client({
     region: "auto",
     endpoint: process.env.R2_ENDPOINT,
@@ -26,28 +28,31 @@ const s3 = new S3Client({
     }
 });
 
+// 🧠 helper
+function generateKey() {
+    return "galeria/img_" + Date.now() + ".jpg";
+}
+
 // 🧪 TEST
 app.get("/", (req, res) => {
     res.json({ ok: true, message: "API funcionando 🚀" });
 });
 
 
-// 📸 LISTAR IMÁGENES
+// 📸 LISTAR
 app.get("/list", async (req, res) => {
     try {
 
         const data = await s3.send(
-            new ListObjectsV2Command({
-                Bucket: BUCKET
-            })
+            new ListObjectsV2Command({ Bucket: BUCKET })
         );
 
         const baseUrl = "https://pub-23557c39f90d46d584f7e9b28f7dff3b.r2.dev";
 
         const urls = (data.Contents || [])
-            .map(file => file.Key)
-            .filter(key => key && key.endsWith(".jpg"))
-            .map(key => `${baseUrl}/${key}`);
+            .map(f => f.Key)
+            .filter(k => k && /\.(jpg|jpeg|png|webp)$/i.test(k))
+            .map(k => `${baseUrl}/${k}`);
 
         res.json(urls);
 
@@ -58,11 +63,34 @@ app.get("/list", async (req, res) => {
 });
 
 
-// 📤 UPLOAD IMAGEN
+// 🔐 SIGNED URL (UPLOAD DIRECTO)
+app.get("/sign", async (req, res) => {
+    try {
+
+        const key = generateKey();
+
+        const command = new PutObjectCommand({
+            Bucket: BUCKET,
+            Key: key,
+            ContentType: "image/jpeg"
+        });
+
+        const url = await getSignedUrl(s3, command, { expiresIn: 60 });
+
+        res.json({ url, key });
+
+    } catch (err) {
+        console.log(err);
+        res.status(500).json({ error: "error generando firma" });
+    }
+});
+
+
+// 📤 UPLOAD FALLBACK (BASE64)
 app.post("/upload", async (req, res) => {
     try {
 
-        const { name, base64 } = req.body;
+        const { base64 } = req.body;
 
         if (!base64) {
             return res.status(400).json({ error: "sin imagen" });
@@ -70,14 +98,16 @@ app.post("/upload", async (req, res) => {
 
         const buffer = Buffer.from(base64, "base64");
 
+        const key = generateKey();
+
         await s3.send(new PutObjectCommand({
             Bucket: BUCKET,
-            Key: "galeria/" + name,
+            Key: key,
             Body: buffer,
             ContentType: "image/jpeg"
         }));
 
-        res.json({ ok: true });
+        res.json({ ok: true, key });
 
     } catch (e) {
         console.log(e);
@@ -86,7 +116,7 @@ app.post("/upload", async (req, res) => {
 });
 
 
-// 🗑 DELETE FIJO (CORREGIDO)
+// 🗑 DELETE
 app.get("/delete", async (req, res) => {
     try {
 
@@ -96,29 +126,21 @@ app.get("/delete", async (req, res) => {
             return res.status(400).json({ error: "sin file" });
         }
 
-        // 🔥 limpiar si viene URL
-        if (file.includes("http")) {
-            file = file.substring(file.lastIndexOf("/") + 1);
-        }
+        file = file.split("/").pop().trim();
 
-        file = file.trim();
+        const key = file.startsWith("galeria/")
+            ? file
+            : "galeria/" + file;
 
-        // 💣 IMPORTANTE: reconstruir KEY EXACTO
-        const key = "galeria/" + file;
-
-        console.log("🧨 KEY FINAL:", key);
-
-        const result = await s3.send(new DeleteObjectCommand({
+        await s3.send(new DeleteObjectCommand({
             Bucket: BUCKET,
             Key: key
         }));
 
-        console.log("✔ R2 RESPONSE:", result);
-
         res.json({ ok: true, deleted: key });
 
     } catch (e) {
-        console.log("❌ ERROR DELETE:", e);
+        console.log(e);
         res.status(500).json({ error: e.message });
     }
 });
